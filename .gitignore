@@ -1,0 +1,8 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pdf
+*.parquet
+*.json
+page_*.json
