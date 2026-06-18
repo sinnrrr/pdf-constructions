@@ -3,7 +3,17 @@ import sys, re, json, math
 from collections import Counter, defaultdict
 import fitz
 
-CODE_RE = re.compile(r'^[А-ЯҐЄІЇа-яґєії]{1,5}-\d{1,3}[А-ЯҐЄІЇа-яґєії]?$')
+CODE_RE    = re.compile(r'^[А-ЯҐЄІЇа-яґєії]{1,5}-\d{1,3}[А-ЯҐЄІЇа-яґєії]?$')
+# NxN=N calc strings appear only on spec-floor pages; detect structural dimension products
+CALC_RE    = re.compile(r'^\d+[,\.]\d+x\d+[,\.]\d+=\d+[,\.]\d+$')
+# Two-decimal numbers — door widths are ≤2.5 m; larger values are room dims / areas
+DECIMAL_RE = re.compile(r'^\d+[,\.]\d{2}$')
+
+# Prefixes that over-count because apartment-type codes share the same prefix.
+# Filter: on pages without calc strings use "small decimal ≤ 2.5 m within 80 px";
+#         on pages WITH calc strings use "calc string within 115 px".
+# ponytail: only Дв confirmed problematic; extend set if other prefixes need it.
+_FILTERED_PREFIXES = {'Дв'}
 
 COL_MIN_AREA  =  1_000
 COL_MAX_AREA  = 15_000
@@ -90,22 +100,40 @@ def count_columns(drawings: list, color: str) -> int:
     return len(clusters)
 
 
+def _is_real_label(x0: float, y0: float,
+                   decimals: list, calcs: list, has_calcs: bool) -> bool:
+    """Return True if a filtered-prefix label at (x0,y0) looks like a real element."""
+    if has_calcs:
+        return bool(calcs) and min(math.hypot(cx - x0, cy - y0) for cx, cy in calcs) <= 115
+    return any(v <= 2.5 for dx, dy, v in decimals if abs(dx - x0) < 80 and abs(dy - y0) < 80)
+
+
 def main():
     pdf, page_num = sys.argv[1], int(sys.argv[2])
     doc = fitz.open(pdf)
     p   = doc[page_num - 1]
 
+    words    = p.get_text("words")
+    decimals = [(w[0], w[1], float(w[4].strip().replace(',', '.')))
+                for w in words if DECIMAL_RE.match(w[4].strip())]
+    calcs    = [(w[0], w[1]) for w in words if CALC_RE.match(w[4].strip())]
+    has_calcs = bool(calcs)
+
     label_counts: Counter = Counter()
-    for w in p.get_text("words"):
+    for w in words:
         t = w[4].strip()
-        if CODE_RE.match(t):
-            label_counts[t.rsplit("-", 1)[0]] += 1
+        if not CODE_RE.match(t):
+            continue
+        prefix = t.rsplit("-", 1)[0]
+        if prefix in _FILTERED_PREFIXES:
+            if not _is_real_label(w[0], w[1], decimals, calcs, has_calcs):
+                continue
+        label_counts[prefix] += 1
 
     drawings   = p.get_drawings()
     candidates = extract_col_candidates(p)
     doc.close()
 
-    # Columns are the most numerous small repeated filled element → highest count wins.
     col_color = candidates[0]["color"] if candidates else None
     col_count = count_columns(drawings, col_color)
 
