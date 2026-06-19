@@ -63,9 +63,9 @@ def extract_col_candidates(page) -> list[dict]:
     return candidates
 
 
-def count_columns(drawings: list, color: str) -> int:
+def count_columns(drawings: list, color: str) -> list:
     if not color:
-        return 0
+        return []
     centroids, big_areas = [], []
     for d in drawings:
         if _hex(d.get("fill")) != color:
@@ -84,7 +84,7 @@ def count_columns(drawings: list, color: str) -> int:
             big_areas.append(area)
 
     if not centroids:
-        return 0
+        return []
 
     avg_big = sum(big_areas) / len(big_areas) if big_areas else COL_MAX_AREA
     radius  = math.sqrt(avg_big) * 0.5
@@ -97,7 +97,7 @@ def count_columns(drawings: list, color: str) -> int:
                 break
         else:
             clusters.append((cx, cy))
-    return len(clusters)
+    return clusters  # list[tuple[float, float]]
 
 
 def _is_real_label(x0: float, y0: float,
@@ -108,18 +108,16 @@ def _is_real_label(x0: float, y0: float,
     return any(v <= 2.5 for dx, dy, v in decimals if abs(dx - x0) < 80 and abs(dy - y0) < 80)
 
 
-def main():
-    pdf, page_num = sys.argv[1], int(sys.argv[2])
-    doc = fitz.open(pdf)
-    p   = doc[page_num - 1]
-
-    words    = p.get_text("words")
-    decimals = [(w[0], w[1], float(w[4].strip().replace(',', '.')))
-                for w in words if DECIMAL_RE.match(w[4].strip())]
-    calcs    = [(w[0], w[1]) for w in words if CALC_RE.match(w[4].strip())]
+def analyze_page(page) -> dict:
+    words     = page.get_text("words")
+    decimals  = [(w[0], w[1], float(w[4].strip().replace(',', '.')))
+                 for w in words if DECIMAL_RE.match(w[4].strip())]
+    calcs     = [(w[0], w[1]) for w in words if CALC_RE.match(w[4].strip())]
     has_calcs = bool(calcs)
 
     label_counts: Counter = Counter()
+    label_positions: dict = defaultdict(list)
+
     for w in words:
         t = w[4].strip()
         if not CODE_RE.match(t):
@@ -129,23 +127,38 @@ def main():
             if not _is_real_label(w[0], w[1], decimals, calcs, has_calcs):
                 continue
         label_counts[prefix] += 1
+        label_positions[prefix].append((w[0], w[1], w[2], w[3]))
 
-    drawings   = p.get_drawings()
-    candidates = extract_col_candidates(p)
+    drawings   = page.get_drawings()
+    candidates = extract_col_candidates(page)
+    col_color  = candidates[0]["color"] if candidates else None
+    clusters   = count_columns(drawings, col_color)
+
+    return {
+        "counts":     dict(label_counts),
+        "positions":  dict(label_positions),
+        "col_color":  col_color,
+        "col_points": clusters,
+        "col_count":  len(clusters),
+        "candidates": candidates,
+    }
+
+
+def main():
+    pdf, page_num = sys.argv[1], int(sys.argv[2])
+    doc = fitz.open(pdf)
+    r   = analyze_page(doc[page_num - 1])
     doc.close()
-
-    col_color = candidates[0]["color"] if candidates else None
-    col_count = count_columns(drawings, col_color)
 
     print(f"\n{'Конструкція':<40} {'К-сть':>6} {'Од.':<6}")
     print("-" * 55)
-    for prefix, count in sorted(label_counts.items()):
+    for prefix, count in sorted(r["counts"].items()):
         print(f"{prefix:<40} {count:>6} шт.")
-    if col_color and col_count:
-        print(f"{'Колони':<40} {col_count:>6} шт.   [{col_color}]")
-    print(f"\nВсього: {sum(label_counts.values()) + col_count}")
-    print(f"[debug] candidates: {json.dumps(candidates, ensure_ascii=False)}")
-    print(f"[debug] column color: {col_color}")
+    if r["col_color"] and r["col_count"]:
+        print(f"{'Колони':<40} {r['col_count']:>6} шт.   [{r['col_color']}]")
+    print(f"\nВсього: {sum(r['counts'].values()) + r['col_count']}")
+    print(f"[debug] candidates: {json.dumps(r['candidates'], ensure_ascii=False)}")
+    print(f"[debug] column color: {r['col_color']}")
 
 
 if __name__ == "__main__":

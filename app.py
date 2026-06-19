@@ -1,0 +1,205 @@
+import io
+import fitz
+import streamlit as st
+import pandas as pd
+from PIL import Image, ImageDraw
+from streamlit_image_select import image_select
+from floor_plan_extract import analyze_page
+
+st.set_page_config(page_title="Аналіз плану поверху", page_icon="📐", layout="wide")
+
+# ── cached helpers ────────────────────────────────────────────────────────────
+
+@st.cache_data(show_spinner=False)
+def get_thumbnails(pdf_bytes: bytes) -> list[bytes]:
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    thumbs = [doc[i].get_pixmap(dpi=50).tobytes("png") for i in range(len(doc))]
+    doc.close()
+    return thumbs
+
+# ── annotation ────────────────────────────────────────────────────────────────
+
+ANNO_DPI = 150  # 300 DPI produces images too large to display well in Streamlit;
+                # 150 DPI gives sharp output at a reasonable size
+_COLORS  = ["#2196F3", "#4CAF50", "#FF9800", "#9C27B0", "#F44336", "#00BCD4",
+            "#795548", "#607D8B"]
+
+# Marker radii in PDF points so they scale correctly with the image content.
+# Labels are ~15–18 pts wide; a 15-pt radius dot sits cleanly over each one.
+_R_LABEL_PTS = 15   # radius for element labels
+_R_COL_PTS   = 20   # radius for column centroids (slightly larger)
+
+def annotate(pdf_bytes: bytes, idx: int, result: dict) -> Image.Image:
+    # collect all detected positions in PDF points
+    all_cx, all_cy = [], []
+    for positions in result["positions"].values():
+        for x0, y0, x1, y1 in positions:
+            all_cx.append((x0 + x1) / 2)
+            all_cy.append((y0 + y1) / 2)
+    for cx, cy in result["col_points"]:
+        all_cx.append(cx); all_cy.append(cy)
+
+    doc  = fitz.open(stream=pdf_bytes, filetype="pdf")
+    page = doc[idx]
+
+    if all_cx:
+        pad_pts = 200  # PDF points (~70mm at 1:100 scale — one room of context)
+        clip = fitz.Rect(
+            max(0,                min(all_cx) - pad_pts),
+            max(0,                min(all_cy) - pad_pts),
+            min(page.rect.width,  max(all_cx) + pad_pts),
+            min(page.rect.height, max(all_cy) + pad_pts),
+        )
+        pix = page.get_pixmap(dpi=ANNO_DPI, clip=clip)
+        ox, oy = clip.x0, clip.y0
+    else:
+        pix = page.get_pixmap(dpi=ANNO_DPI)
+        ox, oy = 0, 0
+
+    doc.close()
+    # Convert to RGBA so alpha blending on markers works correctly in PIL
+    img  = Image.frombytes("RGB", (pix.width, pix.height), pix.samples).convert("RGBA")
+    draw = ImageDraw.Draw(img, "RGBA")
+    s    = ANNO_DPI / 72  # PDF pts → pixels
+    r_l  = _R_LABEL_PTS * s   # label marker radius in pixels
+    r_c  = _R_COL_PTS   * s   # column marker radius in pixels
+    lw   = max(2, round(s))   # outline width scaled with DPI
+
+    for i, prefix in enumerate(sorted(result["positions"])):
+        color = _COLORS[i % len(_COLORS)]
+        # Parse hex to RGBA tuple for reliable PIL alpha support
+        r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+        fill_rgba    = (r, g, b, 200)
+        outline_rgba = (255, 255, 255, 255)
+        for x0, y0, x1, y1 in result["positions"][prefix]:
+            cx = ((x0 + x1) / 2 - ox) * s
+            cy = ((y0 + y1) / 2 - oy) * s
+            draw.ellipse([cx - r_l, cy - r_l, cx + r_l, cy + r_l],
+                         fill=fill_rgba, outline=outline_rgba, width=lw)
+
+    for cx, cy in result["col_points"]:
+        px = (cx - ox) * s
+        py = (cy - oy) * s
+        draw.ellipse([px - r_c, py - r_c, px + r_c, py + r_c],
+                     fill=(229, 57, 53, 200), outline=(255, 255, 255, 255), width=lw)
+
+    return img.convert("RGB")
+
+def legend_html(prefixes: list[str], has_cols: bool) -> str:
+    items = [f'<span style="color:{_COLORS[i % len(_COLORS)]}">⬤</span> {p}'
+             for i, p in enumerate(sorted(prefixes))]
+    if has_cols:
+        items.append('<span style="color:#E53935">○</span> Колони')
+    return "  &nbsp;&nbsp;".join(items)
+
+# ── sidebar ───────────────────────────────────────────────────────────────────
+
+with st.sidebar:
+    uploaded = st.file_uploader("Завантажте PDF файл", type="pdf", label_visibility="collapsed")
+
+    if uploaded:
+        chosen_page   = st.session_state.get("chosen_page")
+        sidebar_thumb = st.session_state.get("sidebar_thumb")
+
+        if sidebar_thumb:
+            st.image(sidebar_thumb, caption=f"стор. {chosen_page + 1}", use_container_width=True)
+        else:
+            st.caption("Клікніть на сторінку →")
+
+        result = (st.session_state.get("results") or {}).get(chosen_page)
+        if result:
+            counts    = result["counts"]
+            col_count = result["col_count"]
+            total     = sum(counts.values()) + col_count
+            num_types = len(counts) + (1 if col_count else 0)
+
+            st.divider()
+            m1, m2 = st.columns(2)
+            m1.metric("Всього", total)
+            m2.metric("Типів", num_types)
+
+            rows = [{"Конструкція": k, "К-сть": v} for k, v in sorted(counts.items())]
+            if col_count:
+                rows.append({"Конструкція": "Колони", "К-сть": col_count})
+
+            df = pd.DataFrame(rows)
+            st.dataframe(df, hide_index=True, use_container_width=True,
+                         column_config={"К-сть": st.column_config.NumberColumn("К-сть", format="%d")})
+
+            buf = io.BytesIO()
+            df.to_excel(buf, index=False, sheet_name="Конструкції")
+            buf.seek(0)
+            st.download_button(
+                "⬇ Завантажити Excel",
+                data=buf,
+                file_name=f"{st.session_state.get('pdf_name', 'план')}_стор{chosen_page + 1}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+# ── main area ─────────────────────────────────────────────────────────────────
+
+if not uploaded:
+    st.info("Завантажте PDF файл з планом поверху щоб почати")
+    st.stop()
+
+pdf_bytes = uploaded.read()
+
+with st.spinner("Готую сторінки…"):
+    thumbs = get_thumbnails(pdf_bytes)
+
+if "chosen_page" in st.session_state:
+    st.session_state["sidebar_thumb"] = thumbs[st.session_state["chosen_page"]]
+
+# seed chosen_page=0 to match image_select's default so it doesn't auto-fire on first load
+if "chosen_page" not in st.session_state:
+    st.session_state["chosen_page"] = 0
+
+is_analyzing = st.session_state.get("is_analyzing", False)
+has_results  = "results" in st.session_state
+gen          = st.session_state.get("analysis_gen", 0)
+
+with st.expander("Сторінки PDF", expanded=not (has_results or is_analyzing), key=f"pages_{gen}"):
+    pil_thumbs = [Image.open(io.BytesIO(b)) for b in thumbs]
+    chosen = image_select(
+        label="Клікніть на сторінку для аналізу",
+        images=pil_thumbs,
+        captions=[f"стор. {i + 1}" for i in range(len(thumbs))],
+        use_container_width=False,
+        return_value="index",
+    )
+
+# phase 1: new selection → collapse expander immediately, mark as analyzing
+if not is_analyzing and chosen is not None and chosen != st.session_state.get("chosen_page"):
+    st.session_state["chosen_page"]   = chosen
+    st.session_state["sidebar_thumb"] = thumbs[chosen]
+    st.session_state["is_analyzing"]  = True
+    st.session_state["analysis_gen"]  = gen + 1
+    st.rerun()
+
+# phase 2: expander collapsed, now do the work
+if is_analyzing:
+    idx = st.session_state["chosen_page"]
+    with st.spinner("Аналізую…"):
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        st.session_state["results"]      = {idx: analyze_page(doc[idx])}
+        st.session_state["pdf_name"]     = uploaded.name
+        doc.close()
+    st.session_state["is_analyzing"] = False
+    st.rerun()
+
+# ── annotated image ───────────────────────────────────────────────────────────
+
+chosen_page = st.session_state.get("chosen_page")
+result      = (st.session_state.get("results") or {}).get(chosen_page)
+
+if result:
+    with st.expander("Показати що знайдено на кресленні", expanded=True):
+        if result["positions"] or result["col_points"]:
+            st.markdown(
+                legend_html(list(result["positions"].keys()), bool(result["col_points"])),
+                unsafe_allow_html=True,
+            )
+            st.image(annotate(pdf_bytes, chosen_page, result), use_container_width=True)
+        else:
+            st.info("Елементи не знайдено на цій сторінці")
