@@ -11,26 +11,24 @@ st.set_page_config(page_title="Аналіз плану поверху", page_ico
 # ── cached helpers ────────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False)
-def get_thumbnails(pdf_bytes: bytes) -> list[bytes]:
+def get_thumbnails(pdf_bytes: bytes) -> list[Image.Image]:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    thumbs = [doc[i].get_pixmap(dpi=50).tobytes("png") for i in range(len(doc))]
+    thumbs = [Image.open(io.BytesIO(doc[i].get_pixmap(dpi=50).tobytes("png")))
+              for i in range(len(doc))]
     doc.close()
     return thumbs
 
 # ── annotation ────────────────────────────────────────────────────────────────
 
-ANNO_DPI = 150  # 300 DPI produces images too large to display well in Streamlit;
-                # 150 DPI gives sharp output at a reasonable size
+ANNO_DPI = 150  # 300 DPI is too large to display well in Streamlit; 150 stays sharp
 _COLORS  = ["#2196F3", "#4CAF50", "#FF9800", "#9C27B0", "#F44336", "#00BCD4",
             "#795548", "#607D8B"]
 
-# Marker radii in PDF points so they scale correctly with the image content.
-# Labels are ~15–18 pts wide; a 15-pt radius dot sits cleanly over each one.
-_R_LABEL_PTS = 15   # radius for element labels
-_R_COL_PTS   = 20   # radius for column centroids (slightly larger)
+# Marker radii in PDF points so they scale with the image; labels are ~15–18 pts wide
+_R_LABEL_PTS = 15
+_R_COL_PTS   = 20
 
 def annotate(pdf_bytes: bytes, idx: int, result: dict) -> Image.Image:
-    # collect all detected positions in PDF points
     all_cx, all_cy = [], []
     for positions in result["positions"].values():
         for x0, y0, x1, y1 in positions:
@@ -43,7 +41,7 @@ def annotate(pdf_bytes: bytes, idx: int, result: dict) -> Image.Image:
     page = doc[idx]
 
     if all_cx:
-        pad_pts = 200  # PDF points (~70mm at 1:100 scale — one room of context)
+        pad_pts = 200  # ~70mm at 1:100 scale — one room of context around the detections
         clip = fitz.Rect(
             max(0,                min(all_cx) - pad_pts),
             max(0,                min(all_cy) - pad_pts),
@@ -57,25 +55,21 @@ def annotate(pdf_bytes: bytes, idx: int, result: dict) -> Image.Image:
         ox, oy = 0, 0
 
     doc.close()
-    # Convert to RGBA so alpha blending on markers works correctly in PIL
     img  = Image.frombytes("RGB", (pix.width, pix.height), pix.samples).convert("RGBA")
     draw = ImageDraw.Draw(img, "RGBA")
     s    = ANNO_DPI / 72  # PDF pts → pixels
-    r_l  = _R_LABEL_PTS * s   # label marker radius in pixels
-    r_c  = _R_COL_PTS   * s   # column marker radius in pixels
-    lw   = max(2, round(s))   # outline width scaled with DPI
+    r_l  = _R_LABEL_PTS * s
+    r_c  = _R_COL_PTS   * s
+    lw   = max(2, round(s))
 
     for i, prefix in enumerate(sorted(result["positions"])):
         color = _COLORS[i % len(_COLORS)]
-        # Parse hex to RGBA tuple for reliable PIL alpha support
         r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
-        fill_rgba    = (r, g, b, 200)
-        outline_rgba = (255, 255, 255, 255)
         for x0, y0, x1, y1 in result["positions"][prefix]:
             cx = ((x0 + x1) / 2 - ox) * s
             cy = ((y0 + y1) / 2 - oy) * s
             draw.ellipse([cx - r_l, cy - r_l, cx + r_l, cy + r_l],
-                         fill=fill_rgba, outline=outline_rgba, width=lw)
+                         fill=(r, g, b, 200), outline=(255, 255, 255, 255), width=lw)
 
     for cx, cy in result["col_points"]:
         px = (cx - ox) * s
@@ -148,29 +142,28 @@ pdf_bytes = uploaded.read()
 with st.spinner("Готую сторінки…"):
     thumbs = get_thumbnails(pdf_bytes)
 
-if "chosen_page" in st.session_state:
-    st.session_state["sidebar_thumb"] = thumbs[st.session_state["chosen_page"]]
-
 # seed chosen_page=0 to match image_select's default so it doesn't auto-fire on first load
 if "chosen_page" not in st.session_state:
     st.session_state["chosen_page"] = 0
+else:
+    st.session_state["sidebar_thumb"] = thumbs[st.session_state["chosen_page"]]
 
 is_analyzing = st.session_state.get("is_analyzing", False)
 has_results  = "results" in st.session_state
 gen          = st.session_state.get("analysis_gen", 0)
 
+chosen = None  # image_select doesn't render while the expander is collapsed
 with st.expander("Сторінки PDF", expanded=not (has_results or is_analyzing), key=f"pages_{gen}"):
-    pil_thumbs = [Image.open(io.BytesIO(b)) for b in thumbs]
     chosen = image_select(
         label="Клікніть на сторінку для аналізу",
-        images=pil_thumbs,
+        images=thumbs,
         captions=[f"стор. {i + 1}" for i in range(len(thumbs))],
         use_container_width=False,
         return_value="index",
     )
 
 # phase 1: new selection → collapse expander immediately, mark as analyzing
-if not is_analyzing and chosen is not None and chosen != st.session_state.get("chosen_page"):
+if not is_analyzing and chosen is not None and chosen != st.session_state["chosen_page"]:
     st.session_state["chosen_page"]   = chosen
     st.session_state["sidebar_thumb"] = thumbs[chosen]
     st.session_state["is_analyzing"]  = True
@@ -182,15 +175,15 @@ if is_analyzing:
     idx = st.session_state["chosen_page"]
     with st.spinner("Аналізую…"):
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        st.session_state["results"]      = {idx: analyze_page(doc[idx])}
-        st.session_state["pdf_name"]     = uploaded.name
+        st.session_state["results"]  = {idx: analyze_page(doc[idx])}
+        st.session_state["pdf_name"] = uploaded.name
         doc.close()
     st.session_state["is_analyzing"] = False
     st.rerun()
 
 # ── annotated image ───────────────────────────────────────────────────────────
 
-chosen_page = st.session_state.get("chosen_page")
+chosen_page = st.session_state["chosen_page"]
 result      = (st.session_state.get("results") or {}).get(chosen_page)
 
 if result:

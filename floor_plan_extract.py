@@ -97,12 +97,11 @@ def count_columns(drawings: list, color: str) -> list:
                 break
         else:
             clusters.append((cx, cy))
-    return clusters  # list[tuple[float, float]]
+    return clusters
 
 
 def _is_real_label(x0: float, y0: float,
                    decimals: list, calcs: list, has_calcs: bool) -> bool:
-    """Return True if a filtered-prefix label at (x0,y0) looks like a real element."""
     if has_calcs:
         return bool(calcs) and min(math.hypot(cx - x0, cy - y0) for cx, cy in calcs) <= 115
     return any(v <= 2.5 for dx, dy, v in decimals if abs(dx - x0) < 80 and abs(dy - y0) < 80)
