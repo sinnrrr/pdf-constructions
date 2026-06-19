@@ -20,7 +20,8 @@ def get_thumbnails(pdf_bytes: bytes) -> list[Image.Image]:
 
 # ── annotation ────────────────────────────────────────────────────────────────
 
-ANNO_DPI = 150  # 300 DPI is too large to display well in Streamlit; 150 stays sharp
+ANNO_DPI      = 150       # 300 DPI is too large to display well in Streamlit; 150 stays sharp
+_MAX_ANNO_PX  = 4_000_000 # cap rendered area (~4MP) so A0/A1 pages can't OOM the 1GB tier
 _COLORS  = ["#2196F3", "#4CAF50", "#FF9800", "#9C27B0", "#F44336", "#00BCD4",
             "#795548", "#607D8B"]
 
@@ -48,16 +49,28 @@ def annotate(pdf_bytes: bytes, idx: int, result: dict) -> Image.Image:
             min(page.rect.width,  max(all_cx) + pad_pts),
             min(page.rect.height, max(all_cy) + pad_pts),
         )
-        pix = page.get_pixmap(dpi=ANNO_DPI, clip=clip)
+        region = clip
         ox, oy = clip.x0, clip.y0
     else:
-        pix = page.get_pixmap(dpi=ANNO_DPI)
+        clip   = None
+        region = page.rect
         ox, oy = 0, 0
 
+    # Cap render DPI so the pixmap area stays under _MAX_ANNO_PX — an A0 page at a
+    # fixed 150 DPI is ~35MP and would blow past the 1GB tier through the pixmap +
+    # PIL RGB + RGBA copies. Downscaling here bounds peak RAM to a few MB.
+    dpi    = ANNO_DPI
+    px_est = (region.width / 72 * dpi) * (region.height / 72 * dpi)
+    if px_est > _MAX_ANNO_PX:
+        dpi = max(36, int(dpi * (_MAX_ANNO_PX / px_est) ** 0.5))
+
+    pix = page.get_pixmap(dpi=dpi, clip=clip)
     doc.close()
-    img  = Image.frombytes("RGB", (pix.width, pix.height), pix.samples).convert("RGBA")
+    img  = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    pix  = None  # drop the pixmap buffer before allocating the RGBA copy
+    img  = img.convert("RGBA")
     draw = ImageDraw.Draw(img, "RGBA")
-    s    = ANNO_DPI / 72  # PDF pts → pixels
+    s    = dpi / 72  # PDF pts → pixels
     r_l  = _R_LABEL_PTS * s
     r_c  = _R_COL_PTS   * s
     lw   = max(2, round(s))
@@ -96,7 +109,7 @@ with st.sidebar:
         sidebar_thumb = st.session_state.get("sidebar_thumb")
 
         if sidebar_thumb:
-            st.image(sidebar_thumb, caption=f"стор. {chosen_page + 1}", use_container_width=True)
+            st.image(sidebar_thumb, caption=f"стор. {chosen_page + 1}", width='stretch')
         else:
             st.caption("Клікніть на сторінку →")
 
@@ -117,7 +130,7 @@ with st.sidebar:
                 rows.append({"Конструкція": "Колони", "К-сть": col_count})
 
             df = pd.DataFrame(rows)
-            st.dataframe(df, hide_index=True, use_container_width=True,
+            st.dataframe(df, hide_index=True, width='stretch',
                          column_config={"К-сть": st.column_config.NumberColumn("К-сть", format="%d")})
 
             buf = io.BytesIO()
@@ -128,7 +141,7 @@ with st.sidebar:
                 data=buf,
                 file_name=f"{st.session_state.get('pdf_name', 'план')}_стор{chosen_page + 1}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+                use_container_width=True,  # download_button doesn't support width= yet
             )
 
 # ── main area ─────────────────────────────────────────────────────────────────
@@ -158,7 +171,7 @@ with st.expander("Сторінки PDF", expanded=not (has_results or is_analyzi
         label="Клікніть на сторінку для аналізу",
         images=thumbs,
         captions=[f"стор. {i + 1}" for i in range(len(thumbs))],
-        use_container_width=False,
+        use_container_width=False,  # image_select doesn't support width= yet
         return_value="index",
     )
 
@@ -193,6 +206,6 @@ if result:
                 legend_html(list(result["positions"].keys()), bool(result["col_points"])),
                 unsafe_allow_html=True,
             )
-            st.image(annotate(pdf_bytes, chosen_page, result), use_container_width=True)
+            st.image(annotate(pdf_bytes, chosen_page, result), width='stretch')
         else:
             st.info("Елементи не знайдено на цій сторінці")

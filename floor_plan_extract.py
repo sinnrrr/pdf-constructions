@@ -34,9 +34,9 @@ def _hex(color) -> str | None:
     return None
 
 
-def extract_col_candidates(page) -> list[dict]:
+def extract_col_candidates(drawings: list) -> list[dict]:
     by_color: dict[str, list[tuple[float, float]]] = defaultdict(list)
-    for d in page.get_drawings():
+    for d in drawings:
         fill = _hex(d.get("fill"))
         if fill is None or fill == "#ffffff":
             continue
@@ -129,9 +129,10 @@ def analyze_page(page) -> dict:
         label_positions[prefix].append((w[0], w[1], w[2], w[3]))
 
     drawings   = page.get_drawings()
-    candidates = extract_col_candidates(page)
+    candidates = extract_col_candidates(drawings)
     col_color  = candidates[0]["color"] if candidates else None
     clusters   = count_columns(drawings, col_color)
+    del drawings  # large on A0/A1 plans — free before the dict is stored in session
 
     return {
         "counts":     dict(label_counts),
