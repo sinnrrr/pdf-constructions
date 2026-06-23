@@ -2,7 +2,7 @@ import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
-const CODE_RE    = /^[А-ЯҐЄІЇа-яґєії]{1,5}-\d{1,3}[А-ЯҐЄІЇа-яґєії]?$/;
+const CODE_RE    = /^[А-ЯҐЄІЇа-яґєії]{1,5}[-_]\d{1,3}[А-ЯҐЄІЇа-яґєії]?$/;
 const CALC_RE    = /^\d+[,.]\d+x\d+[,.]\d+=\d+[,.]\d+$/;
 const DECIMAL_RE = /^\d+[,.]\d{2}$/;
 const FILTERED   = new Set(['Дв']);
@@ -29,9 +29,9 @@ function analyze(items, pageH) {
   for (const w of words) {
     const t = w.text.trim();
     if (!CODE_RE.test(t)) continue;
-    const prefix = t.slice(0, t.lastIndexOf('-'));
+    const prefix = t.slice(0, t.search(/[-_]/));
     if (FILTERED.has(prefix) && !isReal(w.x0, w.y0)) continue;
-    counts[prefix] = (counts[prefix] || 0) + 1;
+    counts[t] = (counts[t] || 0) + 1;
   }
   return counts;
 }
@@ -58,7 +58,7 @@ $('next').onclick = () => { if (pdf && pageNum < pdf.numPages) { pageNum++; show
 
 function renderTable(counts) {
   const tbody = $('tbl').querySelector('tbody');
-  const entries = Object.entries(counts).sort((a, b) => a[0].localeCompare(b[0], 'uk'));
+  const entries = Object.entries(counts).sort((a, b) => a[0].localeCompare(b[0], 'uk', { numeric: true }));
   const total = entries.reduce((s, [, n]) => s + n, 0);
   tbody.innerHTML = entries
     .map(([k, n]) => `<tr><td>${k}</td><td class="num">${n}</td></tr>`).join('')

@@ -5,7 +5,7 @@ const URL = 'file:///Users/sinnrrr/Downloads/%D0%9A%D0%B0%D1%80%D0%B4%D0%B0%D0%B
 const CODE_RE    = /^[А-ЯҐЄІЇа-яґєії]{1,5}-\d{1,3}[А-ЯҐЄІЇа-яґєії]?$/;
 const CALC_RE    = /^\d+[,.]\d+x\d+[,.]\d+=\d+[,.]\d+$/;
 const DECIMAL_RE = /^\d+[,.]\d{2}$/;
-const FILTERED   = new Set(['Дв']);
+const FILTERED_PREFIXES = new Set(['Дв']);
 
 // PDF.js item -> {x0,y0,x1,y1,text}. transform=[a,b,c,d,e,f]; e,f = origin.
 // getTextContent y grows upward; Python (PyMuPDF) y grows downward. Flip y so
@@ -39,8 +39,8 @@ function analyze(items, pageH) {
     const t = w.text.trim();
     if (!CODE_RE.test(t)) continue;
     const prefix = t.slice(0, t.lastIndexOf('-'));
-    if (FILTERED.has(prefix) && !isReal(w.x0, w.y0)) continue;
-    counts[prefix] = (counts[prefix] || 0) + 1;
+    if (FILTERED_PREFIXES.has(prefix) && !isReal(w.x0, w.y0)) continue;
+    counts[t] = (counts[t] || 0) + 1;
   }
   return counts;
 }
@@ -62,6 +62,33 @@ console.log('COUNTS:', counts);
 const total = Object.values(counts).reduce((a, b) => a + b, 0);
 console.log('Всього:', total);
 
-const ok = counts['Вк'] === 19 && counts['Вт'] === 1 && counts['Дв'] === 32 && total === 52;
+const expected = {
+  'Вк-7': 1,
+  'Вк-9': 2,
+  'Вк-10': 1,
+  'Вк-11': 1,
+  'Вк-12': 1,
+  'Вк-13': 1,
+  'Вк-14': 1,
+  'Вк-15': 1,
+  'Вк-16': 1,
+  'Вк-17': 1,
+  'Вк-18': 2,
+  'Вк-20': 2,
+  'Вк-21': 2,
+  'Вк-22': 2,
+  'Вт-1': 1,
+  'Дв-1': 1,
+  'Дв-2': 15,
+  'Дв-3': 1,
+  'Дв-4': 7,
+  'Дв-5': 1,
+  'Дв-6': 1,
+  'Дв-10': 4,
+  'Дв-20': 2,
+};
+const ok = Object.keys(expected).length === Object.keys(counts).length
+  && Object.entries(expected).every(([k, v]) => counts[k] === v)
+  && total === 52;
 console.log(ok ? 'PASS' : 'FAIL');
 process.exit(0);
