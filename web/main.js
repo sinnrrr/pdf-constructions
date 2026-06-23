@@ -40,6 +40,8 @@ const $ = id => document.getElementById(id);
 const canvas = $('canvas'), ctx = canvas.getContext('2d');
 let pdf = null, pageNum = 1, renderTask = null;
 
+window.addEventListener('resize', () => { clearTimeout(window._rt); window._rt = setTimeout(() => pdf && show(), 150); });
+
 $('open').onclick = () => $('file').click();
 $('file').onchange = async e => {
   const f = e.target.files[0];
@@ -69,11 +71,16 @@ async function show() {
   $('tbl').querySelector('tbody').innerHTML = '';
 
   const page = await pdf.getPage(pageNum);
+  const dpr = window.devicePixelRatio || 1;
   const wrapW = $('canvas-wrap').clientWidth - 20;
   const base = page.getViewport({ scale: 1 });
-  const vp = page.getViewport({ scale: wrapW / base.width });
-  canvas.width = vp.width;
-  canvas.height = vp.height;
+  const scale = wrapW / base.width;
+  const vp = page.getViewport({ scale });
+  canvas.width = vp.width * dpr;
+  canvas.height = vp.height * dpr;
+  canvas.style.width = vp.width + 'px';
+  canvas.style.height = vp.height + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   if (renderTask) renderTask.cancel();
   renderTask = page.render({ canvasContext: ctx, viewport: vp });
