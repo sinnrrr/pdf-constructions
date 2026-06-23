@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Stats</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px system-ui, sans-serif; }
+  #app { display: flex; height: 100vh; }
+  #left { flex: 1; display: flex; flex-direction: column; border-right: 1px solid #ccc; min-width: 0; }
+  #bar { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid #ccc; }
+  #bar button { font: inherit; padding: 4px 10px; cursor: pointer; }
+  #pageinfo { min-width: 60px; text-align: center; }
+  #canvas-wrap { flex: 1; overflow: auto; padding: 10px; background: #f3f3f3; }
+  canvas { background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.2); display: block; }
+  #right { width: 280px; display: flex; flex-direction: column; }
+  #right h2 { margin: 0; padding: 12px 14px; font-size: 14px; border-bottom: 1px solid #ccc; background: #fafafa; }
+  table { width: 100%; border-collapse: collapse; user-select: text; }
+  td { padding: 6px 14px; border-bottom: 1px solid #eee; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.total td { font-weight: 600; border-top: 2px solid #ccc; }
+  #status { padding: 10px 14px; color: #888; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="left">
+    <div id="bar">
+      <button id="open">Відкрити PDF</button>
+      <button id="prev">◀</button>
+      <span id="pageinfo">–</span>
+      <button id="next">▶</button>
+      <input id="file" type="file" accept="application/pdf" hidden>
+    </div>
+    <div id="canvas-wrap"><canvas id="canvas"></canvas></div>
+  </div>
+  <div id="right">
+    <h2>Конструкція &nbsp;&nbsp; К-сть</h2>
+    <table id="tbl"><tbody></tbody></table>
+    <div id="status"></div>
+  </div>
+</div>
+<script type="module" src="/main.js"></script>
+</body>
+</html>

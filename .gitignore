@@ -1,8 +1,11 @@
-.env
-.venv/
+# Python
 __pycache__/
 *.pyc
-*.pdf
-*.parquet
-*.json
-page_*.json
+.venv/
+
+# Node
+web/node_modules/
+web/dist/
+
+# Env
+.env
